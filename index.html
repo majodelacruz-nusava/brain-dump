@@ -163,6 +163,7 @@
   const defaults={ webhook:"", deadlineMin:60, intervalMin:60, quietStart:"22:00", quietEnd:"08:00" };
 
   let SERVER=false;            // set after probing /api/state
+  let SERVER_WEBHOOK_SET=false; // server already has a webhook (via env/config)
   let cfg=loadLS(LS_CFG, defaults);
   let tasks=loadLS(LS_TASKS, []);
   let filter="active";
@@ -177,7 +178,7 @@
       const r=await fetch("/api/state",{cache:"no-store"});
       if(!r.ok) throw 0;
       const data=await r.json();
-      SERVER=true; tasks=data.tasks||[]; cfg=Object.assign({},defaults,data.cfg||{});
+      SERVER=true; tasks=data.tasks||[]; cfg=Object.assign({},defaults,data.cfg||{}); SERVER_WEBHOOK_SET=!!data.webhookSet;
     }catch(e){ SERVER=false; }
     const b=$("#modeBadge");
     if(SERVER){ b.className="mode server"; b.textContent="Always-on server — nags even when this is closed"; }
@@ -199,7 +200,7 @@
         const backup=loadLS("bd_mirror",[]);
         if(backup.length){ await api("/api/restore",{method:"POST",body:JSON.stringify({tasks:backup})}); d=await api("/api/state"); }
       }
-      tasks=d.tasks||[]; cfg=Object.assign({},defaults,d.cfg||{});
+      tasks=d.tasks||[]; cfg=Object.assign({},defaults,d.cfg||{}); SERVER_WEBHOOK_SET=!!d.webhookSet;
       mirror(); render();
     }catch(e){}
   }
@@ -303,9 +304,11 @@
   // ---------- settings ----------
   function openSettings(){
     $("#s-webhook").value=cfg.webhook||"";
+    $("#s-webhook").placeholder=(SERVER&&SERVER_WEBHOOK_SET)?"Connected ✓ — leave blank to keep current":"https://hooks.slack.com/services/T000/B000/xxxx";
     $("#s-deadline").value=cfg.deadlineMin; $("#s-interval").value=cfg.intervalMin;
     $("#s-quietstart").value=cfg.quietStart; $("#s-quietend").value=cfg.quietEnd;
-    $("#s-status").textContent=""; $("#s-status").className="status";
+    if(SERVER&&SERVER_WEBHOOK_SET){ $("#s-status").className="status ok"; $("#s-status").textContent="Slack is connected on the server."; }
+    else { $("#s-status").textContent=""; $("#s-status").className="status"; }
     $("#overlay").classList.add("show");
   }
   function closeSettings(){ $("#overlay").classList.remove("show"); }
@@ -318,10 +321,10 @@
   }
   async function testSlack(){
     const url=$("#s-webhook").value.trim(), st=$("#s-status");
-    if(!url){ st.className="status err"; st.textContent="Paste a webhook URL first."; return; }
+    if(!url && !(SERVER&&SERVER_WEBHOOK_SET)){ st.className="status err"; st.textContent="Paste a webhook URL first."; return; }
     st.className="status"; st.textContent="Sending…";
     if(SERVER){
-      try{ const r=await api("/api/test",{method:"POST",body:JSON.stringify({webhook:url})});
+      try{ const r=await api("/api/test",{method:"POST",body:JSON.stringify(url?{webhook:url}:{})});
         if(r.ok){ st.className="status ok"; st.textContent="Sent — check Slack."; } else { st.className="status err"; st.textContent=r.error||"Failed to send."; } }
       catch(e){ st.className="status err"; st.textContent="Server error."; }
     } else {

@@ -140,7 +140,9 @@ const server = http.createServer(async (req, res) => {
   const p = u.pathname;
 
   if (p === "/api/state" && req.method === "GET") {
-    return send(res, 200, { tasks, cfg });
+    // Never expose the webhook URL over the public endpoint — just whether one is set.
+    const safeCfg = Object.assign({}, cfg, { webhook: "" });
+    return send(res, 200, { tasks, cfg: safeCfg, webhookSet: !!cfg.webhook });
   }
   if (p === "/api/tasks" && req.method === "POST") {
     const body = await readBody(req);
@@ -177,7 +179,7 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/config" && req.method === "POST") {
     const body = await readBody(req);
     cfg = Object.assign({}, cfg, {
-      webhook: typeof body.webhook === "string" ? body.webhook.trim() : cfg.webhook,
+      webhook: (typeof body.webhook === "string" && body.webhook.trim()) ? body.webhook.trim() : cfg.webhook,
       deadlineMin: Math.max(1, +body.deadlineMin || cfg.deadlineMin),
       intervalMin: Math.max(1, +body.intervalMin || cfg.intervalMin),
       quietStart: body.quietStart || cfg.quietStart,

@@ -1,0 +1,10 @@
+name: keep-alive
+on:
+  schedule:
+    - cron: '5,17,29,41,53 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS https://brain-dump-2u16.onrender.com/ -o /dev/null || true

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: brain-dump
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true
+    envVars:
+      - key: SLACK_WEBHOOK_URL
+        sync: false

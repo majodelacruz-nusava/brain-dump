@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Brain Dump — Nag Me Until It's Done</title>
+<style>
+  :root{
+    --bg:#f7f8fc; --panel:#ffffff; --panel2:#f1f3f9; --line:#e4e7f0;
+    --text:#202437; --muted:#737a8c; --accent:#5468ff; --accent2:#3f54e8;
+    --ok:#16a34a; --warn:#d97706; --over:#e23b4e;
+    --shadow:0 1px 2px rgba(20,30,70,.04), 0 6px 20px rgba(20,30,70,.05);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased; padding:28px 16px 80px;
+  }
+  .wrap{max-width:680px; margin:0 auto}
+  header{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:20px}
+  h1{font-size:23px; margin:0; letter-spacing:-.3px}
+  h1 .em{color:var(--accent)}
+  .sub{color:var(--muted); font-size:13px; margin:3px 0 0}
+  .mode{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; margin-top:6px}
+  .mode.server{background:rgba(22,163,74,.12); color:var(--ok)}
+  .mode.local{background:rgba(217,119,6,.12); color:var(--warn)}
+  button{font-family:inherit; cursor:pointer; border:none; border-radius:9px}
+  .gear{background:var(--panel); color:var(--muted); border:1px solid var(--line); padding:8px 12px; font-size:13px; box-shadow:var(--shadow)}
+  .gear:hover{color:var(--text); border-color:#d3d8e6}
+
+  .dump{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:18px; box-shadow:var(--shadow)}
+  textarea{
+    width:100%; min-height:66px; resize:vertical; background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:10px; padding:12px; font:15px/1.45 inherit; outline:none;
+  }
+  textarea::placeholder{color:#9aa0b2}
+  textarea:focus{border-color:var(--accent); background:#fff}
+  .dump-row{display:flex; align-items:center; justify-content:space-between; margin-top:10px; gap:12px}
+  .hint{color:var(--muted); font-size:12px}
+  .add{background:var(--accent); color:#fff; padding:10px 18px; font-size:14px; font-weight:600}
+  .add:hover{background:var(--accent2)}
+
+  .filters{display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap}
+  .chip{background:var(--panel); border:1px solid var(--line); color:var(--muted); padding:6px 12px; border-radius:20px; font-size:13px}
+  .chip.active{color:var(--accent); border-color:var(--accent); background:rgba(84,104,255,.08); font-weight:600}
+
+  ul{list-style:none; margin:0; padding:0}
+  li.task{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:12px 14px; margin-bottom:10px; display:flex; align-items:flex-start; gap:12px; box-shadow:var(--shadow);
+  }
+  li.task.over{border-color:rgba(226,59,78,.45); background:#fff6f7}
+  li.task.done{opacity:.55}
+  .check{
+    flex:0 0 auto; width:22px; height:22px; border-radius:50%; border:2px solid #cdd3e3;
+    background:#fff; margin-top:1px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px;
+  }
+  .check:hover{border-color:var(--ok)}
+  li.task.done .check{background:var(--ok); border-color:var(--ok)}
+  .body{flex:1; min-width:0}
+  .txt{word-wrap:break-word}
+  li.task.done .txt{text-decoration:line-through}
+  .meta{font-size:12px; color:var(--muted); margin-top:4px; display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+  .badge{padding:2px 8px; border-radius:6px; font-weight:600; font-size:11px}
+  .badge.live{background:rgba(22,163,74,.12); color:var(--ok)}
+  .badge.soon{background:rgba(217,119,6,.14); color:var(--warn)}
+  .badge.over{background:rgba(226,59,78,.14); color:var(--over)}
+  .nags{color:var(--muted)}
+  .del{background:transparent; color:#b3b9c9; font-size:13px; padding:4px 8px}
+  .del:hover{color:var(--over)}
+  .empty{color:var(--muted); text-align:center; padding:34px 0; font-size:14px}
+
+  .overlay{position:fixed; inset:0; background:rgba(30,40,80,.28); display:none; align-items:flex-start; justify-content:center; padding:40px 16px; z-index:50}
+  .overlay.show{display:flex}
+  .modal{background:var(--panel); border:1px solid var(--line); border-radius:16px; width:100%; max-width:460px; padding:22px; box-shadow:0 20px 60px rgba(20,30,70,.18)}
+  .modal h2{margin:0 0 4px; font-size:18px}
+  .modal p.lead{color:var(--muted); font-size:13px; margin:0 0 16px}
+  label{display:block; font-size:13px; color:var(--muted); margin:14px 0 6px}
+  input[type=text],input[type=url],input[type=number],input[type=time]{
+    width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:10px; font:14px inherit; outline:none;
+  }
+  input:focus{border-color:var(--accent); background:#fff}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .modal-actions{display:flex; gap:10px; margin-top:20px}
+  .btn-primary{background:var(--accent); color:#fff; padding:10px 16px; font-weight:600; flex:1}
+  .btn-ghost{background:var(--panel2); color:var(--text); border:1px solid var(--line); padding:10px 16px}
+  .test{background:#fff; color:var(--accent); border:1px solid var(--line); padding:9px 14px; font-size:13px; margin-top:10px; width:100%}
+  .test:hover{border-color:var(--accent)}
+  .status{font-size:12px; margin-top:8px; min-height:16px}
+  .status.ok{color:var(--ok)} .status.err{color:var(--over)}
+  .footnote{color:var(--muted); font-size:11px; margin-top:14px; line-height:1.5}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Brain <span class="em">Dump</span></h1>
+      <p class="sub">Type it, forget it. If you don't finish in time, Slack won't let you forget it.</p>
+      <span id="modeBadge" class="mode local">checking…</span>
+    </div>
+    <button class="gear" onclick="openSettings()">⚙ Settings</button>
+  </header>
+
+  <div class="dump">
+    <textarea id="input" placeholder="Dump everything on your mind…  (one task per line — press ⌘/Ctrl+Enter to add)"></textarea>
+    <div class="dump-row">
+      <span class="hint">Each line becomes its own task. Clock starts the moment you add it.</span>
+      <button class="add" onclick="addFromInput()">Add</button>
+    </div>
+  </div>
+
+  <div class="filters">
+    <button class="chip active" data-filter="active" onclick="setFilter('active')">Active</button>
+    <button class="chip" data-filter="overdue" onclick="setFilter('overdue')">Overdue</button>
+    <button class="chip" data-filter="done" onclick="setFilter('done')">Done</button>
+    <button class="chip" data-filter="all" onclick="setFilter('all')">All</button>
+  </div>
+
+  <ul id="list"></ul>
+  <div id="empty" class="empty" style="display:none"></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h2>Settings</h2>
+    <p class="lead" id="settingsLead">Loading…</p>
+
+    <label>Slack Incoming Webhook URL</label>
+    <input type="url" id="s-webhook" placeholder="https://hooks.slack.com/services/T000/B000/xxxx" />
+    <button class="test" onclick="testSlack()">Send a test message</button>
+    <div class="status" id="s-status"></div>
+
+    <div class="grid2">
+      <div><label>Deadline (minutes)</label><input type="number" id="s-deadline" min="1" value="60" /></div>
+      <div><label>Nag every (minutes)</label><input type="number" id="s-interval" min="1" value="60" /></div>
+    </div>
+    <div class="grid2">
+      <div><label>Quiet hours start</label><input type="time" id="s-quietstart" value="22:00" /></div>
+      <div><label>Quiet hours end</label><input type="time" id="s-quietend" value="08:00" /></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="saveSettings()">Save</button>
+      <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
+    </div>
+
+    <p class="footnote">
+      <b>How to get a webhook:</b> Slack → create an app → enable <i>Incoming Webhooks</i> → "Add New Webhook to Workspace" → pick the channel (or your own DM) → copy the URL here.
+    </p>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $=s=>document.querySelector(s);
+  const LS_TASKS="bd_tasks_v1", LS_CFG="bd_cfg_v1";
+  const defaults={ webhook:"", deadlineMin:60, intervalMin:60, quietStart:"22:00", quietEnd:"08:00" };
+
+  let SERVER=false;            // set after probing /api/state
+  let cfg=loadLS(LS_CFG, defaults);
+  let tasks=loadLS(LS_TASKS, []);
+  let filter="active";
+
+  function loadLS(k,fb){ try{const v=JSON.parse(localStorage.getItem(k)); return v==null?fb:v;}catch(e){return fb;} }
+  function saveLS(){ localStorage.setItem(LS_TASKS,JSON.stringify(tasks)); localStorage.setItem(LS_CFG,JSON.stringify(cfg)); }
+  const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+
+  // ---------- server detection ----------
+  async function detectServer(){
+    try{
+      const r=await fetch("/api/state",{cache:"no-store"});
+      if(!r.ok) throw 0;
+      const data=await r.json();
+      SERVER=true; tasks=data.tasks||[]; cfg=Object.assign({},defaults,data.cfg||{});
+    }catch(e){ SERVER=false; }
+    const b=$("#modeBadge");
+    if(SERVER){ b.className="mode server"; b.textContent="Always-on server — nags even when this is closed"; }
+    else { b.className="mode local"; b.textContent="Standalone — keep this tab open to get nagged"; }
+    $("#settingsLead").textContent = SERVER
+      ? "Saved on the server. Nagging runs around the clock."
+      : "Saved in this browser. Nags fire only while this page is open.";
+  }
+
+  // ---------- server-mode API ----------
+  async function api(path,opts){ const r=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},opts)); return r.json(); }
+  function mirror(){ try{ localStorage.setItem("bd_mirror", JSON.stringify(tasks)); }catch(e){} }
+  async function refresh(){
+    if(!SERVER) return;
+    try{
+      let d=await api("/api/state");
+      // Free-host safeguard: if the server lost its list on a restart, restore from this browser's backup.
+      if((!d.tasks||!d.tasks.length)){
+        const backup=loadLS("bd_mirror",[]);
+        if(backup.length){ await api("/api/restore",{method:"POST",body:JSON.stringify({tasks:backup})}); d=await api("/api/state"); }
+      }
+      tasks=d.tasks||[]; cfg=Object.assign({},defaults,d.cfg||{});
+      mirror(); render();
+    }catch(e){}
+  }
+
+  // ---------- task ops ----------
+  async function addFromInput(){
+    const ta=$("#input");
+    const lines=ta.value.split("\n").map(s=>s.trim()).filter(Boolean);
+    if(!lines.length) return;
+    if(SERVER){ await api("/api/tasks",{method:"POST",body:JSON.stringify({lines})}); ta.value=""; ta.focus(); await refresh(); return; }
+    const now=Date.now();
+    lines.forEach(text=>tasks.unshift({ id:uid(), text, created:now, deadline:now+cfg.deadlineMin*60000, nextNag:now+cfg.deadlineMin*60000, nags:0, done:false, doneAt:null }));
+    ta.value=""; ta.focus(); saveLS(); render();
+  }
+  async function toggleDone(id){
+    if(SERVER){ await api("/api/tasks/"+id+"/toggle",{method:"POST"}); await refresh(); return; }
+    const t=tasks.find(x=>x.id===id); if(!t) return;
+    t.done=!t.done; t.doneAt=t.done?Date.now():null; saveLS(); render();
+  }
+  async function del(id){
+    if(SERVER){ await api("/api/tasks/"+id,{method:"DELETE"}); await refresh(); return; }
+    tasks=tasks.filter(x=>x.id!==id); saveLS(); render();
+  }
+
+  // ---------- time helpers ----------
+  function inQuietHours(d){
+    const [sh,sm]=cfg.quietStart.split(":").map(Number), [eh,em]=cfg.quietEnd.split(":").map(Number);
+    const cur=d.getHours()*60+d.getMinutes(), s=sh*60+sm, e=eh*60+em;
+    if(s===e) return false;
+    return s<e ? (cur>=s&&cur<e) : (cur>=s||cur<e);
+  }
+  function nextQuietEnd(d){ const [eh,em]=cfg.quietEnd.split(":").map(Number); const n=new Date(d); n.setHours(eh,em,0,0); if(n<=d) n.setDate(n.getDate()+1); return n.getTime(); }
+  function fmtDur(ms){ const a=Math.abs(ms),h=Math.floor(a/3600000),m=Math.floor((a%3600000)/60000); if(h>0)return h+"h "+m+"m"; if(m>0)return m+"m"; return Math.max(0,Math.floor(a/1000))+"s"; }
+
+  // ---------- client-side nag (standalone only) ----------
+  async function sendSlack(text){
+    if(!cfg.webhook) return false;
+    try{ await fetch(cfg.webhook,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=UTF-8"},body:JSON.stringify({text})}); return true; }
+    catch(e){ return false; }
+  }
+  function nagText(t){
+    const over=Date.now()-t.deadline, when=over<60000?"now due":"overdue by "+fmtDur(over);
+    return (t.nags===0?"⏰ Time's up":"🔁 Still not done ("+t.nags+"x)")+" — *"+t.text+"*  ("+when+"). Just do it and make me stop.";
+  }
+  async function clientTick(){
+    if(SERVER) return; // server does its own nagging
+    const now=Date.now(); let changed=false;
+    for(const t of tasks){
+      if(t.done) continue;
+      if(now>=t.nextNag){
+        if(inQuietHours(new Date(now))){ t.nextNag=nextQuietEnd(new Date(now)); changed=true; }
+        else { await sendSlack(nagText(t)); t.nags++; t.nextNag=now+cfg.intervalMin*60000; changed=true; }
+      }
+    }
+    if(changed) saveLS();
+    render();
+  }
+
+  // ---------- rendering ----------
+  function statusOf(t){
+    if(t.done) return {cls:"done",txt:"done"};
+    const left=t.deadline-Date.now();
+    if(left<=0) return {cls:"over",txt:"overdue "+fmtDur(left)};
+    if(left<=300000) return {cls:"soon",txt:"due in "+fmtDur(left)};
+    return {cls:"live",txt:"due in "+fmtDur(left)};
+  }
+  function visible(){
+    if(filter==="all") return tasks;
+    if(filter==="done") return tasks.filter(t=>t.done);
+    if(filter==="overdue") return tasks.filter(t=>!t.done&&t.deadline-Date.now()<=0);
+    return tasks.filter(t=>!t.done);
+  }
+  function render(){
+    const list=$("#list"), empty=$("#empty"), items=visible();
+    list.innerHTML="";
+    const overdue=tasks.filter(t=>!t.done&&t.deadline-Date.now()<=0).length;
+    document.title=(overdue?("("+overdue+") "):"")+"Brain Dump";
+    if(!items.length){
+      empty.style.display="block";
+      empty.textContent = filter==="done"?"Nothing finished yet.":filter==="overdue"?"Nothing overdue. Nice.":"Nothing here. Dump something above 👆";
+      return;
+    }
+    empty.style.display="none";
+    for(const t of items){
+      const s=statusOf(t), li=document.createElement("li");
+      li.className="task"+(t.done?" done":"")+(!t.done&&s.cls==="over"?" over":"");
+      const nagInfo=t.nags?(' · <span class="nags">nagged '+t.nags+'x</span>'):"";
+      li.innerHTML='<button class="check" title="Mark done">'+(t.done?"✓":"")+'</button>'+
+        '<div class="body"><div class="txt"></div><div class="meta">'+
+        '<span class="badge '+s.cls+'">'+s.txt+'</span>'+
+        '<span>added '+new Date(t.created).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+'</span>'+nagInfo+
+        '</div></div><button class="del" title="Delete">✕</button>';
+      li.querySelector(".txt").textContent=t.text;
+      li.querySelector(".check").onclick=()=>toggleDone(t.id);
+      li.querySelector(".del").onclick=()=>del(t.id);
+      list.appendChild(li);
+    }
+  }
+  function setFilter(f){ filter=f; document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("active",c.dataset.filter===f)); render(); }
+
+  // ---------- settings ----------
+  function openSettings(){
+    $("#s-webhook").value=cfg.webhook||"";
+    $("#s-deadline").value=cfg.deadlineMin; $("#s-interval").value=cfg.intervalMin;
+    $("#s-quietstart").value=cfg.quietStart; $("#s-quietend").value=cfg.quietEnd;
+    $("#s-status").textContent=""; $("#s-status").className="status";
+    $("#overlay").classList.add("show");
+  }
+  function closeSettings(){ $("#overlay").classList.remove("show"); }
+  async function saveSettings(){
+    const next={ webhook:$("#s-webhook").value.trim(), deadlineMin:Math.max(1,+$("#s-deadline").value||60),
+      intervalMin:Math.max(1,+$("#s-interval").value||60), quietStart:$("#s-quietstart").value||"22:00", quietEnd:$("#s-quietend").value||"08:00" };
+    if(SERVER){ await api("/api/config",{method:"POST",body:JSON.stringify(next)}); cfg=Object.assign({},cfg,next); }
+    else { cfg=Object.assign({},cfg,next); saveLS(); if("Notification"in window&&Notification.permission==="default")Notification.requestPermission(); }
+    closeSettings(); render();
+  }
+  async function testSlack(){
+    const url=$("#s-webhook").value.trim(), st=$("#s-status");
+    if(!url){ st.className="status err"; st.textContent="Paste a webhook URL first."; return; }
+    st.className="status"; st.textContent="Sending…";
+    if(SERVER){
+      try{ const r=await api("/api/test",{method:"POST",body:JSON.stringify({webhook:url})});
+        if(r.ok){ st.className="status ok"; st.textContent="Sent — check Slack."; } else { st.className="status err"; st.textContent=r.error||"Failed to send."; } }
+      catch(e){ st.className="status err"; st.textContent="Server error."; }
+    } else {
+      const saved=cfg.webhook; cfg.webhook=url; const ok=await sendSlack("✅ Brain Dump is wired up. This is your test nag."); cfg.webhook=saved;
+      if(ok){ st.className="status ok"; st.textContent="Sent — check Slack. (Browser can't read Slack's reply, so confirm there.)"; }
+      else { st.className="status err"; st.textContent="Couldn't send. Double-check the URL."; }
+    }
+  }
+
+  // ---------- wire up ----------
+  Object.assign(window,{addFromInput,setFilter,openSettings,closeSettings,saveSettings,testSlack});
+  $("#input").addEventListener("keydown",e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter"){ e.preventDefault(); addFromInput(); } });
+  $("#overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeSettings(); });
+
+  (async function init(){
+    await detectServer();
+    render();
+    if(SERVER){ setInterval(refresh,15000); }     // poll server state
+    else { clientTick(); setInterval(clientTick,30000); } // self-nag
+  })();
+})();
+</script>
+</body>
+</html>

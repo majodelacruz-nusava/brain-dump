@@ -1,0 +1,12 @@
+{
+  "name": "brain-dump-nagger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Brain Dump — a to-do list that nags you on Slack until you finish.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

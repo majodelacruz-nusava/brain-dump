@@ -28,10 +28,13 @@ const DEFAULT_CFG = {
   quietEnd: "08:00",
 };
 
-// ---------- persistence (Upstash Redis if configured, else local file) ----------
-const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || "";
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
-const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
+// ---------- persistence (private GitHub data repo if configured, else local file) ----------
+const GH_TOKEN = process.env.GITHUB_TOKEN || "";
+const GH_REPO = process.env.GH_DATA_REPO || "majodelacruz-nusava/brain-dump-data";
+const GH_PATH = process.env.GH_DATA_PATH || "state.json";
+const GH_BRANCH = process.env.GH_BRANCH || "main";
+const USE_GITHUB = !!GH_TOKEN;
+let ghSha = null;
 
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
 function readJSON(file, fallback) {
@@ -40,47 +43,72 @@ function readJSON(file, fallback) {
 function writeJSON(file, data) {
   try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch (e) { console.error("write failed", file, e.message); }
 }
-async function redisCmd(cmd) {
-  const r = await fetch(REDIS_URL, {
-    method: "POST",
-    headers: { Authorization: "Bearer " + REDIS_TOKEN, "Content-Type": "application/json" },
-    body: JSON.stringify(cmd),
+function ghUrl() { return "https://api.github.com/repos/" + GH_REPO + "/contents/" + GH_PATH; }
+async function ghApi(method, extra) {
+  const url = ghUrl() + (method === "GET" ? "?ref=" + GH_BRANCH : "");
+  return fetch(url, {
+    method,
+    headers: {
+      Authorization: "Bearer " + GH_TOKEN,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "brain-dump-nagger",
+      "Content-Type": "application/json",
+    },
+    body: extra ? JSON.stringify(extra) : undefined,
   });
-  if (!r.ok) throw new Error("Redis HTTP " + r.status);
-  return r.json(); // { result: ... }
 }
 
 let tasks = [];
 let cfg = Object.assign({}, DEFAULT_CFG);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-// The webhook always comes from the environment, never persisted to the DB.
+// The webhook always comes from the environment, never persisted to storage.
 function cfgForStorage() { const c = Object.assign({}, cfg); delete c.webhook; return c; }
 
 async function loadState() {
-  if (USE_REDIS) {
+  if (USE_GITHUB) {
     try {
-      const [tRes, cRes] = await Promise.all([redisCmd(["GET", "bd:tasks"]), redisCmd(["GET", "bd:cfg"])]);
-      tasks = tRes.result ? JSON.parse(tRes.result) : [];
-      cfg = Object.assign({}, DEFAULT_CFG, cRes.result ? JSON.parse(cRes.result) : {}, { webhook: DEFAULT_CFG.webhook });
-      console.log("Loaded from Redis:", tasks.length, "tasks");
-    } catch (e) {
-      console.error("Redis load failed:", e.message);
-      tasks = []; cfg = Object.assign({}, DEFAULT_CFG);
-    }
+      const r = await ghApi("GET");
+      if (r.status === 200) {
+        const j = await r.json();
+        ghSha = j.sha;
+        const state = JSON.parse(Buffer.from(j.content, "base64").toString("utf8") || "{}");
+        tasks = Array.isArray(state.tasks) ? state.tasks : [];
+        cfg = Object.assign({}, DEFAULT_CFG, state.cfg || {}, { webhook: DEFAULT_CFG.webhook });
+        console.log("Loaded from GitHub data repo:", tasks.length, "tasks");
+      } else if (r.status === 404) {
+        ghSha = null; tasks = []; cfg = Object.assign({}, DEFAULT_CFG);
+        console.log("No state file yet — will create it on first save.");
+      } else {
+        console.error("GitHub load failed:", r.status, (await r.text()).slice(0, 200));
+        tasks = []; cfg = Object.assign({}, DEFAULT_CFG);
+      }
+    } catch (e) { console.error("GitHub load error:", e.message); tasks = []; cfg = Object.assign({}, DEFAULT_CFG); }
   } else {
     tasks = readJSON(TASKS_FILE, []);
     cfg = Object.assign({}, DEFAULT_CFG, readJSON(CONFIG_FILE, {}), { webhook: DEFAULT_CFG.webhook });
   }
 }
-async function saveTasks() {
-  if (USE_REDIS) { try { await redisCmd(["SET", "bd:tasks", JSON.stringify(tasks)]); } catch (e) { console.error("Redis saveTasks failed:", e.message); } }
-  else writeJSON(TASKS_FILE, tasks);
+
+// Serialize all writes so commits never race on the file SHA.
+let saveChain = Promise.resolve();
+async function commitState() {
+  if (!USE_GITHUB) { writeJSON(TASKS_FILE, tasks); writeJSON(CONFIG_FILE, cfgForStorage()); return; }
+  const content = Buffer.from(JSON.stringify({ tasks, cfg: cfgForStorage() })).toString("base64");
+  const body = { message: "update state " + new Date().toISOString(), content, branch: GH_BRANCH };
+  if (ghSha) body.sha = ghSha;
+  let r = await ghApi("PUT", body);
+  if (r.status === 409 || r.status === 422) { // SHA drifted — refetch and retry once
+    const g = await ghApi("GET");
+    if (g.status === 200) { ghSha = (await g.json()).sha; body.sha = ghSha; r = await ghApi("PUT", body); }
+  }
+  if (r.ok) { const j = await r.json(); ghSha = j.content && j.content.sha; }
+  else console.error("GitHub save failed:", r.status, (await r.text()).slice(0, 200));
 }
-async function saveCfg() {
-  if (USE_REDIS) { try { await redisCmd(["SET", "bd:cfg", JSON.stringify(cfgForStorage())]); } catch (e) { console.error("Redis saveCfg failed:", e.message); } }
-  else writeJSON(CONFIG_FILE, cfgForStorage());
-}
+function persist() { saveChain = saveChain.then(() => commitState().catch(e => console.error("persist:", e.message))); return saveChain; }
+async function saveTasks() { await persist(); }
+async function saveCfg() { await persist(); }
+let dirty = false; // set by the nag loop; flushed on a timer to limit commit volume
 
 // ---------- time helpers (server local time) ----------
 function inQuietHours(d) {
@@ -147,7 +175,7 @@ async function nagLoop() {
       }
     }
   }
-  if (changed) await saveTasks();
+  if (changed) dirty = true; // flushed by the timer below to keep commit volume low
 }
 
 // ---------- HTTP helpers ----------
@@ -241,8 +269,9 @@ const server = http.createServer(async (req, res) => {
 loadState().then(() => {
   server.listen(PORT, () => {
     console.log("Brain Dump running at http://localhost:" + PORT);
-    console.log("Storage:", USE_REDIS ? "Upstash Redis (persistent)" : "local file " + DATA_DIR);
+    console.log("Storage:", USE_GITHUB ? "GitHub data repo " + GH_REPO + " (persistent)" : "local file " + DATA_DIR);
     if (!cfg.webhook) console.log("⚠  No Slack webhook yet — add one in Settings or via SLACK_WEBHOOK_URL.");
   });
   setInterval(() => { nagLoop().catch(e => console.error("nagLoop", e)); }, 30000);
+  setInterval(() => { if (dirty) { dirty = false; persist(); } }, 30000); // flush nag-state changes
 });

@@ -190,7 +190,7 @@
 
   // ---------- server-mode API ----------
   async function api(path,opts){ const r=await fetch(path,Object.assign({headers:{"Content-Type":"application/json"}},opts)); return r.json(); }
-  function mirror(){ try{ localStorage.setItem("bd_mirror", JSON.stringify(tasks)); }catch(e){} }
+  function mirror(){ try{ const cur=JSON.parse(localStorage.getItem("bd_mirror")||"[]"); if(tasks.length || !cur.length) localStorage.setItem("bd_mirror", JSON.stringify(tasks)); }catch(e){} }
   async function refresh(){
     if(!SERVER) return;
     try{

@@ -28,7 +28,11 @@ const DEFAULT_CFG = {
   quietEnd: "08:00",
 };
 
-// ---------- persistence ----------
+// ---------- persistence (Upstash Redis if configured, else local file) ----------
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
+
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
 function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
@@ -36,11 +40,47 @@ function readJSON(file, fallback) {
 function writeJSON(file, data) {
   try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch (e) { console.error("write failed", file, e.message); }
 }
-let tasks = readJSON(TASKS_FILE, []);
-let cfg = Object.assign({}, DEFAULT_CFG, readJSON(CONFIG_FILE, {}));
-const saveTasks = () => writeJSON(TASKS_FILE, tasks);
-const saveCfg = () => writeJSON(CONFIG_FILE, cfg);
+async function redisCmd(cmd) {
+  const r = await fetch(REDIS_URL, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + REDIS_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify(cmd),
+  });
+  if (!r.ok) throw new Error("Redis HTTP " + r.status);
+  return r.json(); // { result: ... }
+}
+
+let tasks = [];
+let cfg = Object.assign({}, DEFAULT_CFG);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// The webhook always comes from the environment, never persisted to the DB.
+function cfgForStorage() { const c = Object.assign({}, cfg); delete c.webhook; return c; }
+
+async function loadState() {
+  if (USE_REDIS) {
+    try {
+      const [tRes, cRes] = await Promise.all([redisCmd(["GET", "bd:tasks"]), redisCmd(["GET", "bd:cfg"])]);
+      tasks = tRes.result ? JSON.parse(tRes.result) : [];
+      cfg = Object.assign({}, DEFAULT_CFG, cRes.result ? JSON.parse(cRes.result) : {}, { webhook: DEFAULT_CFG.webhook });
+      console.log("Loaded from Redis:", tasks.length, "tasks");
+    } catch (e) {
+      console.error("Redis load failed:", e.message);
+      tasks = []; cfg = Object.assign({}, DEFAULT_CFG);
+    }
+  } else {
+    tasks = readJSON(TASKS_FILE, []);
+    cfg = Object.assign({}, DEFAULT_CFG, readJSON(CONFIG_FILE, {}), { webhook: DEFAULT_CFG.webhook });
+  }
+}
+async function saveTasks() {
+  if (USE_REDIS) { try { await redisCmd(["SET", "bd:tasks", JSON.stringify(tasks)]); } catch (e) { console.error("Redis saveTasks failed:", e.message); } }
+  else writeJSON(TASKS_FILE, tasks);
+}
+async function saveCfg() {
+  if (USE_REDIS) { try { await redisCmd(["SET", "bd:cfg", JSON.stringify(cfgForStorage())]); } catch (e) { console.error("Redis saveCfg failed:", e.message); } }
+  else writeJSON(CONFIG_FILE, cfgForStorage());
+}
 
 // ---------- time helpers (server local time) ----------
 function inQuietHours(d) {
@@ -107,9 +147,8 @@ async function nagLoop() {
       }
     }
   }
-  if (changed) saveTasks();
+  if (changed) await saveTasks();
 }
-setInterval(() => { nagLoop().catch(e => console.error("nagLoop", e)); }, 30000);
 
 // ---------- HTTP helpers ----------
 function send(res, code, body, type) {
@@ -151,18 +190,18 @@ const server = http.createServer(async (req, res) => {
     for (const text of lines) {
       tasks.unshift({ id: uid(), text, created: now, deadline: now + cfg.deadlineMin * 60000, nextNag: now + cfg.deadlineMin * 60000, nags: 0, done: false, doneAt: null });
     }
-    saveTasks();
+    await saveTasks();
     return send(res, 200, { ok: true, tasks });
   }
   let m = p.match(/^\/api\/tasks\/([^/]+)\/toggle$/);
   if (m && req.method === "POST") {
     const t = tasks.find(x => x.id === m[1]);
-    if (t) { t.done = !t.done; t.doneAt = t.done ? Date.now() : null; saveTasks(); }
+    if (t) { t.done = !t.done; t.doneAt = t.done ? Date.now() : null; await saveTasks(); }
     return send(res, 200, { ok: true, tasks });
   }
   m = p.match(/^\/api\/tasks\/([^/]+)$/);
   if (m && req.method === "DELETE") {
-    tasks = tasks.filter(x => x.id !== m[1]); saveTasks();
+    tasks = tasks.filter(x => x.id !== m[1]); await saveTasks();
     return send(res, 200, { ok: true, tasks });
   }
   if (p === "/api/restore" && req.method === "POST") {
@@ -171,7 +210,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (Array.isArray(body.tasks) && tasks.length === 0 && body.tasks.length) {
       tasks = body.tasks.filter(t => t && t.id && t.text);
-      saveTasks();
+      await saveTasks();
       console.log(new Date().toISOString(), "restored", tasks.length, "tasks from browser backup");
     }
     return send(res, 200, { ok: true, tasks });
@@ -185,7 +224,7 @@ const server = http.createServer(async (req, res) => {
       quietStart: body.quietStart || cfg.quietStart,
       quietEnd: body.quietEnd || cfg.quietEnd,
     });
-    saveCfg();
+    await saveCfg();
     return send(res, 200, { ok: true, cfg });
   }
   if (p === "/api/test" && req.method === "POST") {
@@ -198,8 +237,12 @@ const server = http.createServer(async (req, res) => {
   return serveStatic(res, p);
 });
 
-server.listen(PORT, () => {
-  console.log("Brain Dump running at http://localhost:" + PORT);
-  console.log("Data dir:", DATA_DIR);
-  if (!cfg.webhook) console.log("⚠  No Slack webhook yet — add one in Settings or via SLACK_WEBHOOK_URL.");
+// Load persisted state first, then start serving and nagging.
+loadState().then(() => {
+  server.listen(PORT, () => {
+    console.log("Brain Dump running at http://localhost:" + PORT);
+    console.log("Storage:", USE_REDIS ? "Upstash Redis (persistent)" : "local file " + DATA_DIR);
+    if (!cfg.webhook) console.log("⚠  No Slack webhook yet — add one in Settings or via SLACK_WEBHOOK_URL.");
+  });
+  setInterval(() => { nagLoop().catch(e => console.error("nagLoop", e)); }, 30000);
 });
